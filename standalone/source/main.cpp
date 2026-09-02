@@ -8,10 +8,8 @@
 
 auto main(int argc, char** argv) -> int {
   const std::unordered_map<std::string, greeter::LanguageCode> languages{
-      {"en", greeter::LanguageCode::EN},
-      {"de", greeter::LanguageCode::DE},
-      {"es", greeter::LanguageCode::ES},
-      {"fr", greeter::LanguageCode::FR},
+      {"en", greeter::LanguageCode::EN}, {"de", greeter::LanguageCode::DE},
+      {"es", greeter::LanguageCode::ES}, {"fr", greeter::LanguageCode::FR},
       {"zh", greeter::LanguageCode::ZH},
   };
 
