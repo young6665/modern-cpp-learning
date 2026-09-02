@@ -12,6 +12,7 @@ auto main(int argc, char** argv) -> int {
       {"de", greeter::LanguageCode::DE},
       {"es", greeter::LanguageCode::ES},
       {"fr", greeter::LanguageCode::FR},
+      {"zh", greeter::LanguageCode::ZH},
   };
 
   cxxopts::Options options(*argv, "A program to welcome the world!");
