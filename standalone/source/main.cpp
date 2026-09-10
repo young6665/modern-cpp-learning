@@ -39,6 +39,12 @@ int main() {
             continue;
         }
 
+        if(message.content == "/clear"){
+            store.clear();
+            std::cout << "All message cleared.\n";
+            continue;
+        }
+
         if (!store.add(message)) {
             std::cout << "Message cannot be empty.\n";
             continue;

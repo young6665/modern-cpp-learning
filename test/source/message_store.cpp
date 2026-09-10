@@ -50,11 +50,11 @@ TEST_CASE("MessageStore clears all messages") {
 
     minichat::Message first_message;
     first_message.sender = "young";
-    first_message.content = "1";
+    first_message.content = "Hello";
 
     minichat::Message second_message;
     second_message.sender = "young";
-    second_message.content = "2";
+    second_message.content = "world";
 
     REQUIRE(store.add(first_message));
     REQUIRE(store.add(second_message));
@@ -63,4 +63,5 @@ TEST_CASE("MessageStore clears all messages") {
     store.clear();
 
     CHECK(store.size() == 0);
+
 }
