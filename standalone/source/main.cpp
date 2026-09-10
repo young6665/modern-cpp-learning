@@ -8,31 +8,39 @@ struct Message {
     std::string content;
 };
 
-int main() {
-    std::vector<Message> messages;
-    Message msg;
-
-for (int i = 0; i <= 3; ++i) {
+Message read_message(){
     Message msg;
 
     std::cout << "Sender: ";
-    std::getline(std::cin, msg.sender);
+    std::getline(std::cin , msg.sender);
 
     std::cout << "Message: ";
     std::getline(std::cin, msg.content);
 
-    messages.push_back(msg);
+    return msg;
+}
+
+void print_message(const Message& message){
+    std::cout << message.sender
+              << ": "
+              << message.content
+              << '\n';
+
+}
+
+int main() {
+    std::vector<Message> messages;
+
+for (int i = 0; i <= 3; ++i) {
+   messages.push_back(read_message());
 }
 
     std::cout << "Message count: "
               << messages.size()
               << '\n';
 
-for (std::size_t i = 0; i < messages.size(); ++i) {
-    std::cout << messages[i].sender
-              << ": "
-              << messages[i].content
-              << '\n';
+for (const Message& message : messages) {
+    print_message(message);
 }
     std::cout << "\nPress Enter to exit...";
     std::cin.get();
