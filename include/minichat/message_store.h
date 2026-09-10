@@ -16,6 +16,7 @@ public:
     bool add(const Message& message);
     std::size_t size() const;
     void print_all() const;
+    void clear();
 
 private:
     std::vector<Message> messages_;

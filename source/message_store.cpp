@@ -27,4 +27,8 @@ void MessageStore::print_all() const {
     }
 }
 
+void MessageStore::clear() {
+    messages_.clear();
+}
+
 }

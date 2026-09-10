@@ -44,3 +44,23 @@ TEST_CASE("MessageStore rejects a whitespace-only message") {
     CHECK_FALSE(added);
     CHECK(store.size() == 0);
 }
+
+TEST_CASE("MessageStore clears all messages") {
+    minichat::MessageStore store;
+
+    minichat::Message first_message;
+    first_message.sender = "young";
+    first_message.content = "1";
+
+    minichat::Message second_message;
+    second_message.sender = "young";
+    second_message.content = "2";
+
+    REQUIRE(store.add(first_message));
+    REQUIRE(store.add(second_message));
+    REQUIRE(store.size() == 2);
+
+    store.clear();
+
+    CHECK(store.size() == 0);
+}
