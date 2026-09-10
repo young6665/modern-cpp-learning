@@ -1,4 +1,5 @@
 #include <minichat/message_store.h>
+#include <minichat/command.h>
 
 #include <iostream>
 #include <string>
@@ -22,33 +23,46 @@ int main() {
 
     while (true) {
         minichat::Message message = read_message(sender);
+        const minichat::Command command = 
+            minichat::parse_command(message.content);
 
-        if (message.content == "/quit") {
+        if (command == minichat::Command::quit) {
             break;
         }
 
-        if (message.content == "/list") {
+        if (command == minichat::Command::list){
             store.print_all();
             continue;
         }
 
-        if (message.content == "/count") {
+        if (command == minichat::Command::count) {
             std::cout << "Message count: "
                       << store.size()
                       << '\n';
             continue;
         }
 
-        if(message.content == "/clear"){
+        if (command == minichat::Command::clear){
             store.clear();
             std::cout << "All message cleared.\n";
             continue;
         }
 
+        if (command == minichat::Command::help) {
+            std::cout << "Commands:\n"
+              << "  /list  - Show all messages\n"
+              << "  /count - Show message count\n"
+              << "  /clear - Clear all messages\n"
+              << "  /quit  - Exit\n";
+             continue;        
+
         if (!store.add(message)) {
             std::cout << "Message cannot be empty.\n";
             continue;
         }
+}
+
+
     }
 
     store.print_all();
