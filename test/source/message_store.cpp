@@ -28,3 +28,19 @@ TEST_CASE("MessageStore rejects an empty message") {
     CHECK_FALSE(store.add(message));
     CHECK(store.size() == 0);
 }
+
+TEST_CASE("MessageStore rejects a whitespace-only message") {
+    // Arrange
+    minichat::MessageStore store;
+
+    minichat::Message message;
+    message.sender = "young";
+    message.content = "   ";
+
+    // Act
+    const bool added = store.add(message);
+
+    // Assert
+    CHECK_FALSE(added);
+    CHECK(store.size() == 0);
+}

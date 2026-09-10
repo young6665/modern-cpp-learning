@@ -5,9 +5,10 @@
 namespace minichat {
 
 bool MessageStore::add(const Message& message) {
-    if (message.content.empty()) {
-        return false;
-    }
+    if (message.content.find_first_not_of(" \t\r\n")
+        == std::string::npos) {
+    return false;
+}
 
     messages_.push_back(message);
     return true;
