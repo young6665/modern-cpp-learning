@@ -17,13 +17,6 @@ Message read_message(const std::string& sender){
     return msg;
 }
 
-void print_message_size(const std::vector<Message>& messages){
-    int messages_size = messages.size();
-    std::cout << "Messages count : " 
-              << messages_size
-              << '\n';
-
-}
 
 void print_message(const Message& message){
     std::cout << message.sender
@@ -33,15 +26,34 @@ void print_message(const Message& message){
 
 }
 
-void print_messages(const std::vector<Message>& messages) {
 
-    for (const Message& message : messages) {
-        print_message(message);
-    }
+class MessageStore {
+public:
+    bool add(const Message& message) {
+        if (message.content.empty()) {
+            return false;
+        }
+
+    messages_.push_back(message);
+    return true;
 }
 
+    std::size_t size() const {
+        return messages_.size();
+    }
+
+    void print_all() const {
+        for (const Message& message : messages_) {
+            print_message(message);
+        }
+    }
+
+private:
+    std::vector<Message> messages_;
+};
+
 int main() {
-    std::vector<Message> messages;
+    MessageStore store;
     std::string sender;
     std::cout << "Sender: " ;
     std::getline(std::cin , sender);
@@ -55,20 +67,24 @@ while (true) {
     }
 
     if (message.content == "/list") {
-        print_messages(messages);
+        store.print_all();
         continue;
     }
 
     if (message.content == "/count") {
-        print_message_size(messages);
+        std::cout << "Message count: "
+                  << store.size()
+                  << '\n';
         continue;
     }
 
-    messages.push_back(message);
+    if (!store.add(message)) {
+        std::cout << "Message cannot be empty.\n";
+        continue;
+    }
 }
 
 
-print_messages(messages);
     std::cout << "\nPress Enter to exit...";
     std::cin.get();
     return 0;
