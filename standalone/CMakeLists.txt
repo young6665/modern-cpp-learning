@@ -18,16 +18,39 @@ CPMAddPackage(
 
 CPMAddPackage(NAME Greeter SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# ---- Create standalone executable ----
+# ---- Create executables ----
 
-file(GLOB sources CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/source/*.cpp)
+add_executable(${PROJECT_NAME} source/main.cpp)
+add_executable(TcpServer source/tcp_server.cpp)
+add_executable(TcpClient source/tcp_client.cpp)
 
-add_executable(${PROJECT_NAME} ${sources})
+set_target_properties(
+  ${PROJECT_NAME}
+  PROPERTIES
+    CXX_STANDARD 17
+    OUTPUT_NAME "Greeter"
+)
+
+set_target_properties(
+  TcpServer
+  TcpClient
+  PROPERTIES
+    CXX_STANDARD 17
+)
+
+target_link_libraries(
+  ${PROJECT_NAME}
+  PRIVATE
+    Greeter::Greeter
+    cxxopts
+)
+
+target_link_libraries(TcpServer PRIVATE ws2_32)
+target_link_libraries(TcpClient PRIVATE ws2_32)
 
 if(MSVC)
   target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
+  target_compile_options(TcpServer PRIVATE /utf-8)
+  target_compile_options(TcpClient PRIVATE /utf-8)
 endif()
 
-set_target_properties(${PROJECT_NAME} PROPERTIES CXX_STANDARD 17 OUTPUT_NAME "Greeter")
-
-target_link_libraries(${PROJECT_NAME} Greeter::Greeter cxxopts)
