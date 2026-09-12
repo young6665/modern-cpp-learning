@@ -3,6 +3,85 @@
 #include <ws2tcpip.h>
 #include <string>
 
+bool send_all(
+    SOCKET socket_handle,
+    const char* data,
+    int data_length
+) {
+    int total_sent = 0;
+
+    while (total_sent < data_length) {
+        int bytes_sent = send(
+            socket_handle,
+            data + total_sent,
+            data_length - total_sent,
+            0
+        );
+
+        if (bytes_sent == SOCKET_ERROR ||
+            bytes_sent == 0) {
+            return false;
+        }
+
+        total_sent += bytes_sent;
+    }
+
+    return true;
+}
+
+enum class ReceiveStatus {
+    success,
+    disconnected,
+    error
+};
+
+ReceiveStatus receive_line(
+    SOCKET socket_handle,
+    std::string& pending_data,
+    std::string& message
+) {
+    while (true) {
+        std::size_t newline_position =
+            pending_data.find('\n');
+
+        if (newline_position != std::string::npos) {
+            message = pending_data.substr(
+                0,
+                newline_position
+            );
+
+            pending_data.erase(
+                0,
+                newline_position + 1
+            );
+
+            return ReceiveStatus::success;
+        }
+
+        char buffer[1024]{};
+
+        int bytes_received = recv(
+            socket_handle,
+            buffer,
+            sizeof(buffer),
+            0
+        );
+
+        if (bytes_received == 0) {
+            return ReceiveStatus::disconnected;
+        }
+
+        if (bytes_received == SOCKET_ERROR) {
+            return ReceiveStatus::error;
+        }
+
+        pending_data.append(
+            buffer,
+            bytes_received
+        );
+    }
+}
+
 int main() {
     WSADATA wsa_data{};
 
@@ -76,6 +155,8 @@ int main() {
 
     std::cout << "Connected to server successfully.\n";
 
+   std::string pending_data;
+
     while (true) {
         std::cout << "Enter message: ";
 
@@ -87,14 +168,15 @@ int main() {
             continue;
         }
 
-        int bytes_sent = send(
+        std::string message_packet = message + '\n';
+
+        bool send_success = send_all(
             client_socket,
-            message.c_str(),
-            static_cast<int>(message.size()),
-            0
+            message_packet.c_str(),
+            static_cast<int>(message_packet.size())
         );
 
-        if (bytes_sent == SOCKET_ERROR) {
+        if (!send_success) {
             std::cerr << "Send failed: "
                     << WSAGetLastError()
                     << '\n';
@@ -108,21 +190,24 @@ int main() {
                 << message
                 << '\n';
 
+        std::cout << "Packet bytes sent: "
+                << message_packet.size()
+                << '\n';
+
         if (message == "/quit") {
             std::cout << "Disconnecting from server.\n";
             break;
         }
 
-        char buffer[1024]{};
+        std::string echo_message;
 
-        int bytes_received = recv(
+        ReceiveStatus receive_status = receive_line(
             client_socket,
-            buffer,
-            sizeof(buffer) - 1,
-            0
+            pending_data,
+            echo_message
         );
 
-        if (bytes_received == SOCKET_ERROR) {
+        if (receive_status == ReceiveStatus::error) {
             std::cerr << "Receive failed: "
                     << WSAGetLastError()
                     << '\n';
@@ -132,16 +217,14 @@ int main() {
             return 1;
         }
 
-        if (bytes_received == 0) {
+        if (receive_status == ReceiveStatus::disconnected) {
             std::cout << "Server disconnected.\n";
             break;
         }
 
-            buffer[bytes_received] = '\0';
-
-            std::cout << "Echo received: "
-                    << buffer
-                    << '\n';
+        std::cout << "Echo received: "
+                << echo_message
+                << '\n';
     }
 
     closesocket(client_socket);
