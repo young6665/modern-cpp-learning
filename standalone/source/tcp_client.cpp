@@ -2,6 +2,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <string>
+#include <mutex>
 
 bool send_all(
     SOCKET socket_handle,
@@ -196,6 +197,11 @@ int main() {
 
         if (message == "/quit") {
             std::cout << "Disconnecting from server.\n";
+            break;
+        }
+
+        if (message == "/shutdown") {
+            std::cout << "Server shutdown request sent.\n";
             break;
         }
 

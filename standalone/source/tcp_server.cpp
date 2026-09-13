@@ -2,6 +2,27 @@
 #include <string>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <thread>
+#include <vector>
+#include <mutex>
+#include <algorithm>
+
+std::mutex output_mutex;
+
+std::vector<SOCKET> connected_clients;
+std::mutex clients_mutex;
+
+void log_message(const std::string& text) {
+    std::lock_guard<std::mutex> lock(output_mutex);
+
+    std::cout << text << '\n';
+}
+
+void log_error(const std::string& text) {
+    std::lock_guard<std::mutex> lock(output_mutex);
+
+    std::cerr << text << '\n';
+}
 
 bool send_all(
     SOCKET socket_handle,
@@ -69,7 +90,7 @@ ReceiveStatus receive_line(
 
         if (bytes_received == 0) {
             return ReceiveStatus::disconnected;
-        }
+        } 
 
         if (bytes_received == SOCKET_ERROR) {
             return ReceiveStatus::error;
@@ -81,6 +102,136 @@ ReceiveStatus receive_line(
         );
     }
 }
+
+void add_client(SOCKET client_socket){
+    std::lock_guard<std::mutex> lock(clients_mutex);
+    connected_clients.push_back(client_socket);
+}
+
+void remove_client(SOCKET client_socket) {
+    std::lock_guard<std::mutex> lock(clients_mutex);
+
+    auto client_position = std::find(
+        connected_clients.begin(),
+        connected_clients.end(),
+        client_socket
+    );
+
+    if (client_position != connected_clients.end()) {
+        connected_clients.erase(client_position);
+    }
+}
+
+std::size_t get_client_count() {
+    std::lock_guard<std::mutex> lock(clients_mutex);
+
+    return connected_clients.size();
+}
+
+
+void handle_client(
+    SOCKET client_socket,
+    int client_id
+) {
+    log_message(
+        "[Client " +
+        std::to_string(client_id) +
+        "] handler started."
+    );
+
+    std::string pending_data;
+
+    while (true) {
+        std::string message;
+
+        ReceiveStatus receive_status = receive_line(
+            client_socket,
+            pending_data,
+            message
+        );
+
+        if (receive_status == ReceiveStatus::error) {
+            log_error(
+                "[Client " +
+                std::to_string(client_id) +
+                "] receive failed: " +
+                std::to_string(WSAGetLastError())
+            );
+            break;
+        }
+
+        if (receive_status ==
+            ReceiveStatus::disconnected) {
+            log_message(
+                "[Client " +
+                std::to_string(client_id) +
+                "] disconnected."
+            );
+            break;
+        }
+
+        log_message(
+            "[Client " +
+            std::to_string(client_id) +
+            "] message: " +
+            message
+        );
+
+        if (message == "/quit") {
+            log_message(
+                "[Client " +
+                std::to_string(client_id) +
+                "] requested disconnection."
+            );
+            break;
+        }
+
+        if (message == "/shutdown") {
+            log_message(
+                "[Client " +
+                std::to_string(client_id) +
+                "] /shutdown is temporarily disabled."
+            );
+            break;
+        }
+
+        std::string echo_packet = message + '\n';
+
+        bool echo_success = send_all(
+            client_socket,
+            echo_packet.c_str(),
+            static_cast<int>(echo_packet.size())
+        );
+
+        if (!echo_success) {
+            log_error(
+                "[Client " +
+                std::to_string(client_id) +
+                "] echo send failed: " +
+                std::to_string(WSAGetLastError())
+            );
+            break;
+        }
+
+        log_message(
+            "[Client " +
+            std::to_string(client_id) +
+            "] echo sent: " +
+            message
+        );
+    }
+
+    remove_client(client_socket);
+    closesocket(client_socket);
+
+    log_message(
+        "[Client " +
+        std::to_string(client_id) +
+        "] connection closed. Online clients: " +
+        std::to_string(get_client_count())
+    );
+}
+
 
 int main() {
     WSADATA wsa_data{};
@@ -166,99 +317,65 @@ int main() {
     }
 
     std::cout << "Server is listening on 127.0.0.1:8080...\n";
-    std::cout << "Waiting for a client...\n";
 
-    SOCKET client_socket = accept(
-        server_socket,
-        nullptr,
-        nullptr
-    );
+    constexpr int max_clients = 2;
+    
+    std::vector<std::thread> client_threads;
 
-    if (client_socket == INVALID_SOCKET) {
-        std::cerr << "Accept failed: "
-                << WSAGetLastError()
-                << '\n';
+    for(int client_id = 1; client_id <= max_clients; ++client_id){
+        log_message("Waiting for client " + 
+            std::to_string(client_id) +
+            "...");
+        SOCKET client_socket = accept(
+            server_socket,
+            nullptr,
+            nullptr);
+        if(client_socket == INVALID_SOCKET){
+           std::cerr << "Accept failed: "
+                  << WSAGetLastError()
+                  << '\n';
+            for (std::thread& client_thread :
+                client_threads) {
+                if (client_thread.joinable()) {
+                    client_thread.join();
+                }
+            }
 
-        closesocket(server_socket);
-        WSACleanup();
-        return 1;
-    }
-
-    std::cout << "Client connected successfully.\n";
-
-std::string pending_data;
-
-    while (true) {
-        std::string message;
-
-        ReceiveStatus receive_status = receive_line(
-            client_socket,
-            pending_data,
-            message
-        );
-
-        if (receive_status == ReceiveStatus::error) {
-            std::cerr << "Receive failed: "
-                    << WSAGetLastError()
-                    << '\n';
-
-            closesocket(client_socket);
             closesocket(server_socket);
             WSACleanup();
             return 1;
         }
 
-        if (receive_status == ReceiveStatus::disconnected) {
-            std::cout << "Client disconnected.\n";
-            break;
-        }
+        add_client(client_socket);
 
-        std::cout << "Message received: "
-                << message
-                << '\n';
-
-        if (message == "/quit") {
-            std::cout << "Client requested disconnection.\n";
-            break;
-        }
-
-        std::string echo_packet = message + '\n';
-
-        bool echo_success = send_all(
-            client_socket,
-            echo_packet.c_str(),
-            static_cast<int>(echo_packet.size())
+        log_message(
+                "Client " +
+                std::to_string(client_id) +
+                " connected. Online clients: " +
+                std::to_string(get_client_count())
         );
 
-        if (!echo_success) {
-            std::cerr << "Echo send failed: "
-                    << WSAGetLastError()
-                    << '\n';
-
-            closesocket(client_socket);
-            closesocket(server_socket);
-            WSACleanup();
-            return 1;
-        }
-
-        std::cout << "Echo sent successfully: "
-                << message
-                << '\n';
-
-        std::cout << "Echo bytes sent: "
-                << echo_packet.size()
-                << '\n';
+        client_threads.emplace_back(
+                handle_client,
+                client_socket,
+                client_id
+        );
     }
 
-    closesocket(client_socket);
+
+
+        for (std::thread& client_thread :
+        client_threads) {
+            if (client_thread.joinable()) {
+                client_thread.join();
+            }
+
+         }
+
     closesocket(server_socket);
     WSACleanup();
 
-    return 0;
-
-    closesocket(client_socket);
-    closesocket(server_socket);
-    WSACleanup();
+    log_message("Server stopped.");
 
     return 0;
 }
