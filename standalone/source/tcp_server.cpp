@@ -128,6 +128,26 @@ std::size_t get_client_count() {
     return connected_clients.size();
 }
 
+void broadcast_message(const std::string& message){
+    std::string message_packet = message + '\n';
+
+    std::lock_guard<std::mutex> lock(clients_mutex);
+    for(SOCKET target_socket : connected_clients){
+        bool send_success = send_all(
+            target_socket,
+            message_packet.c_str(),
+            static_cast<int>(message_packet.size())
+        );
+        if (!send_success) {
+            log_error(
+                "Broadcast send failed: " +
+                std::to_string(WSAGetLastError())
+            );
+
+        }
+    }   
+
+}
 
 void handle_client(
     SOCKET client_socket,
@@ -197,40 +217,31 @@ void handle_client(
 
         std::string echo_packet = message + '\n';
 
-        bool echo_success = send_all(
-            client_socket,
-            echo_packet.c_str(),
-            static_cast<int>(echo_packet.size())
-        );
+        std::string chat_message =
+        "[Client " +
+        std::to_string(client_id) +
+        "] " +
+        message;
 
-        if (!echo_success) {
-            log_error(
-                "[Client " +
-                std::to_string(client_id) +
-                "] echo send failed: " +
-                std::to_string(WSAGetLastError())
-            );
-            break;
-        }
+        broadcast_message(chat_message);
 
         log_message(
             "[Client " +
             std::to_string(client_id) +
-            "] echo sent: " +
-            message
-        );
+            "] message broadcasted."
+        );  
     }
+        remove_client(client_socket);
+        closesocket(client_socket);
 
-    remove_client(client_socket);
-    closesocket(client_socket);
-
-    log_message(
-        "[Client " +
-        std::to_string(client_id) +
-        "] connection closed. Online clients: " +
-        std::to_string(get_client_count())
-    );
+        log_message(
+            "[Client " +
+            std::to_string(client_id) +
+            "] connection closed. Online clients: " +
+            std::to_string(get_client_count())
+        );
 }
+
 
 
 int main() {
@@ -364,12 +375,11 @@ int main() {
 
 
 
-        for (std::thread& client_thread :
+    for (std::thread& client_thread :
         client_threads) {
-            if (client_thread.joinable()) {
-                client_thread.join();
+        if (client_thread.joinable()) {
+            client_thread.join();
             }
-
          }
 
     closesocket(server_socket);

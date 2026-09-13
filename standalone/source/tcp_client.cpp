@@ -3,6 +3,12 @@
 #include <ws2tcpip.h>
 #include <string>
 #include <mutex>
+#include <atomic>
+#include <thread>
+
+std::atomic<bool> client_running{true};
+
+std::mutex client_output_mutex;
 
 bool send_all(
     SOCKET socket_handle,
@@ -83,6 +89,77 @@ ReceiveStatus receive_line(
     }
 }
 
+void print_client_message(const std::string& text) {
+    std::lock_guard<std::mutex> lock(
+        client_output_mutex
+    );
+
+    std::cout << text << '\n';
+}
+
+void print_client_error(const std::string& text) {
+    std::lock_guard<std::mutex> lock(
+        client_output_mutex
+    );
+
+    std::cerr << text << '\n';
+}
+
+
+void receive_messages(SOCKET client_socket) {
+    std::string pending_data;
+
+    while (client_running) {
+        std::string message;
+
+        ReceiveStatus receive_status = receive_line(
+            client_socket,
+            pending_data,
+            message
+        );
+
+        if (receive_status == ReceiveStatus::error) {
+            if (client_running) {
+                print_client_error(
+                    "Receive failed: " +
+                    std::to_string(WSAGetLastError())
+                );
+            }
+
+            break;
+        }
+
+        if (receive_status ==
+            ReceiveStatus::disconnected) {
+            if (client_running) {
+                print_client_message(
+                    "Server disconnected."
+                );
+            }
+
+            break;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(
+                client_output_mutex
+            );
+
+            std::cout
+                    << "Message received: "
+                    << message
+                    << '\n'
+                    << '\n'
+                    << "Enter message: "
+                    << std::flush;
+        }
+    }
+
+    client_running = false;
+}
+
+
+
 int main() {
     WSADATA wsa_data{};
 
@@ -156,16 +233,31 @@ int main() {
 
     std::cout << "Connected to server successfully.\n";
 
-   std::string pending_data;
+    client_running = true;
 
-    while (true) {
-        std::cout << "Enter message: ";
+    std::thread receiver_thread(
+        receive_messages,
+        client_socket
+    );
+          
+    {
+        std::lock_guard<std::mutex> lock(
+                client_output_mutex
+            );
+        std::cout << "Enter message: "
+                    << std::flush;
+        
+    }
+    while (client_running) {
+ 
 
         std::string message;
         std::getline(std::cin, message);
 
         if (message.empty()) {
-            std::cout << "Message cannot be empty.\n";
+            print_client_message(
+                "Message cannot be empty."
+            );
             continue;
         }
 
@@ -178,59 +270,36 @@ int main() {
         );
 
         if (!send_success) {
-            std::cerr << "Send failed: "
-                    << WSAGetLastError()
-                    << '\n';
+            print_client_error(
+                "Send failed: " +
+                std::to_string(WSAGetLastError())
+            );
 
-            closesocket(client_socket);
-            WSACleanup();
-            return 1;
-        }
-
-        std::cout << "Message sent successfully: "
-                << message
-                << '\n';
-
-        std::cout << "Packet bytes sent: "
-                << message_packet.size()
-                << '\n';
-
-        if (message == "/quit") {
-            std::cout << "Disconnecting from server.\n";
+            client_running = false;
             break;
         }
 
-        if (message == "/shutdown") {
-            std::cout << "Server shutdown request sent.\n";
-            break;
-        }
-
-        std::string echo_message;
-
-        ReceiveStatus receive_status = receive_line(
-            client_socket,
-            pending_data,
-            echo_message
+        print_client_message(
+            "Message sent successfully: " + message
         );
 
-        if (receive_status == ReceiveStatus::error) {
-            std::cerr << "Receive failed: "
-                    << WSAGetLastError()
-                    << '\n';
+        if (message == "/quit") {
+            print_client_message(
+                "Disconnecting from server."
+            );
 
-            closesocket(client_socket);
-            WSACleanup();
-            return 1;
-        }
-
-        if (receive_status == ReceiveStatus::disconnected) {
-            std::cout << "Server disconnected.\n";
+            client_running = false;
             break;
         }
+    }
 
-        std::cout << "Echo received: "
-                << echo_message
-                << '\n';
+    shutdown(
+    client_socket,
+    SD_SEND
+    );
+
+    if (receiver_thread.joinable()) {
+        receiver_thread.join();
     }
 
     closesocket(client_socket);
