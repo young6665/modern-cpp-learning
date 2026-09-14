@@ -428,6 +428,11 @@ int main() {
             client_socket,
             client_id
         );
+
+        log_message(
+        "Stored thread objects: " +
+        std::to_string(client_threads.size())
+        );
     }
     // main 线程不再使用监听套接字，可以安全关闭
     closesocket(server_socket);
