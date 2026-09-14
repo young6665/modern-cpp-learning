@@ -6,11 +6,14 @@
 #include <vector>
 #include <mutex>
 #include <algorithm>
+#include <atomic>
 
 std::mutex output_mutex;
 
 std::vector<SOCKET> connected_clients;
 std::mutex clients_mutex;
+
+std::atomic<bool> server_running{true};
 
 void log_message(const std::string& text) {
     std::lock_guard<std::mutex> lock(output_mutex);
@@ -149,6 +152,14 @@ void broadcast_message(const std::string& message){
 
 }
 
+void shutdown_all_clients(){
+    std::lock_guard<std::mutex> lock(clients_mutex);
+
+    for(SOCKET client_socket : connected_clients){
+        shutdown(client_socket, SD_BOTH);
+    }
+}
+
 void handle_client(
     SOCKET client_socket,
     int client_id
@@ -210,10 +221,14 @@ void handle_client(
             log_message(
                 "[Client " +
                 std::to_string(client_id) +
-                "] /shutdown is temporarily disabled."
+                "] requested server shutdown."
             );
+            broadcast_message("[Server] shutting down.");
+
+            server_running = false;
             break;
         }
+
 
         std::string echo_packet = message + '\n';
 
@@ -328,64 +343,106 @@ int main() {
     }
 
     std::cout << "Server is listening on 127.0.0.1:8080...\n";
-
-    constexpr int max_clients = 2;
     
     std::vector<std::thread> client_threads;
+    int next_client_id = 1;
+    log_message("Waiting for clients...");
 
-    for(int client_id = 1; client_id <= max_clients; ++client_id){
-        log_message("Waiting for client " + 
-            std::to_string(client_id) +
-            "...");
+    while (server_running) {
+        fd_set read_sockets;
+        FD_ZERO(&read_sockets);
+        FD_SET(server_socket, &read_sockets);
+
+        timeval timeout{};
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 200000; // 200 毫秒
+
+        int ready_count = select(
+            0,
+            &read_sockets,
+            nullptr,
+            nullptr,
+            &timeout
+        );
+
+        if (ready_count == SOCKET_ERROR) {
+            log_error(
+                "select failed: " +
+                std::to_string(WSAGetLastError())
+            );
+
+            server_running = false;
+            break;
+        }
+
+        // 200 毫秒内没有新连接，回到 while 顶部检查 server_running
+        if (ready_count == 0) {
+            continue;
+        }
+
+        if (!server_running) {
+            break;
+        }
+
+        if (!FD_ISSET(server_socket, &read_sockets)) {
+            continue;
+        }
+
+        sockaddr_in client_address{};
+        int client_address_length = sizeof(client_address);
+
         SOCKET client_socket = accept(
             server_socket,
-            nullptr,
-            nullptr);
-        if(client_socket == INVALID_SOCKET){
-           std::cerr << "Accept failed: "
-                  << WSAGetLastError()
-                  << '\n';
-            for (std::thread& client_thread :
-                client_threads) {
-                if (client_thread.joinable()) {
-                    client_thread.join();
-                }
-            }
+            reinterpret_cast<sockaddr*>(&client_address),
+            &client_address_length
+        );
 
-            closesocket(server_socket);
-            WSACleanup();
-            return 1;
+        if (client_socket == INVALID_SOCKET) {
+            log_error(
+                "accept failed: " +
+                std::to_string(WSAGetLastError())
+            );
+
+            continue;
         }
+
+        // 防止 /shutdown 与 accept 恰好同时发生
+        if (!server_running) {
+            closesocket(client_socket);
+            break;
+        }
+
+        int client_id = next_client_id++;
 
         add_client(client_socket);
 
         log_message(
-                "Client " +
-                std::to_string(client_id) +
-                " connected. Online clients: " +
-                std::to_string(get_client_count())
+            "Client " +
+            std::to_string(client_id) +
+            " connected. Online clients: " +
+            std::to_string(get_client_count())
         );
 
         client_threads.emplace_back(
-                handle_client,
-                client_socket,
-                client_id
+            handle_client,
+            client_socket,
+            client_id
         );
     }
+    // main 线程不再使用监听套接字，可以安全关闭
+    closesocket(server_socket);
 
+    // 让所有阻塞在 recv() 的客户端线程退出
+    shutdown_all_clients();
 
-
-    for (std::thread& client_thread :
-        client_threads) {
+    for (std::thread& client_thread : client_threads) {
         if (client_thread.joinable()) {
             client_thread.join();
-            }
-         }
+        }
+    }
 
-    closesocket(server_socket);
     WSACleanup();
 
     log_message("Server stopped.");
-
     return 0;
 }

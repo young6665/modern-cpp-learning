@@ -252,7 +252,14 @@ int main() {
  
 
         std::string message;
-        std::getline(std::cin, message);
+
+        if (!std::getline(std::cin, message)) {
+            break;
+        }
+
+        if (!client_running) {
+            break;
+        }
 
         if (message.empty()) {
             print_client_message(
@@ -291,6 +298,7 @@ int main() {
             client_running = false;
             break;
         }
+
     }
 
     shutdown(
