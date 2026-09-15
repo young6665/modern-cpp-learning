@@ -9,11 +9,13 @@
 #include <atomic>
 #include <condition_variable>
 #include <queue>
+#include <unordered_map>
 
 std::mutex output_mutex;
 std::vector<SOCKET> connected_clients;
 std::mutex clients_mutex;
 std::atomic<bool> server_running{true};
+std::unordered_map<SOCKET, std::string> client_names;
 
 
 struct ClientTask {
@@ -82,16 +84,33 @@ bool send_all(
             data_length - total_sent,
             0
         );
-
         if (bytes_sent == SOCKET_ERROR ||
             bytes_sent == 0) {
             return false;
         }
-
         total_sent += bytes_sent;
     }
-
     return true;
+}
+
+void send_to_client(
+    SOCKET client_socket,
+    const std::string& message
+) {
+    std::string packet = message + '\n';
+
+    bool send_success = send_all(
+        client_socket,
+        packet.c_str(),
+        static_cast<int>(packet.size())
+    );
+
+    if (!send_success) {
+        log_error(
+            "Send to client failed: " +
+            std::to_string(WSAGetLastError())
+        );
+    }
 }
 
 enum class ReceiveStatus{
@@ -191,9 +210,21 @@ ReceiveStatus receive_line(
     }
 }
 
-void add_client(SOCKET client_socket){
-    std::lock_guard<std::mutex> lock(clients_mutex);
-    connected_clients.push_back(client_socket);
+void add_client(
+    SOCKET client_socket,
+    int client_id
+) {
+    std::lock_guard<std::mutex> lock(
+        clients_mutex
+    );
+
+    connected_clients.push_back(
+        client_socket
+    );
+
+    client_names[client_socket] =
+        "Client " +
+        std::to_string(client_id);
 }
 
 void remove_client(SOCKET client_socket) {
@@ -208,6 +239,8 @@ void remove_client(SOCKET client_socket) {
     if (client_position != connected_clients.end()) {
         connected_clients.erase(client_position);
     }
+
+    client_names.erase(client_socket);
 }
 
 std::size_t get_client_count() {
@@ -231,10 +264,8 @@ void broadcast_message(const std::string& message){
                 "Broadcast send failed: " +
                 std::to_string(WSAGetLastError())
             );
-
         }
     }   
-
 }
 
 void shutdown_all_clients(){
@@ -243,6 +274,38 @@ void shutdown_all_clients(){
     for(SOCKET client_socket : connected_clients){
         shutdown(client_socket, SD_BOTH);
     }
+}
+
+std::string get_client_name(SOCKET client_socket) {
+    std::lock_guard<std::mutex> lock(clients_mutex);
+    auto name_position = client_names.find(client_socket);
+    if (name_position == client_names.end()) {
+        return "Unknown";
+    }
+    return name_position->second;
+}
+
+bool change_client_name(
+    SOCKET client_socket,
+    const std::string& new_name,
+    std::string& old_name
+){
+    std::lock_guard<std::mutex> lock(clients_mutex);
+
+    for(const auto& name_entry : client_names){
+        if(name_entry.first != client_socket &&
+            name_entry.second == new_name){
+                return false;
+        }
+    }
+    auto name_position = client_names.find(client_socket);
+        if(name_position == client_names.end()){
+            return false;
+        }
+    old_name = name_position -> second;
+    name_position ->second = new_name;
+
+    return true;
 }
 
 void handle_client(
@@ -320,12 +383,85 @@ void handle_client(
             break;
         }
 
+        if (message == "/name") {
+            send_to_client(
+                client_socket,
+                "[Server] Usage: /name <username>"
+            );
+
+            continue;
+        }
+
+        const std::string name_command = "/name ";
+
+        if (message.rfind(name_command, 0) == 0) {
+            std::string new_name = message.substr(
+                name_command.size()
+            );
+
+            if (new_name.empty()) {
+                send_to_client(
+                    client_socket,
+                    "[Server] Username cannot be empty."
+                );
+
+                continue;
+            }
+
+            if (new_name.size() > 16) {
+                send_to_client(
+                    client_socket,
+                    "[Server] Username cannot exceed 16 characters."
+                );
+
+                continue;
+            }
+
+            if (new_name.find(' ') != std::string::npos) {
+                send_to_client(
+                    client_socket,
+                    "[Server] Username cannot contain spaces."
+                );
+
+                continue;
+            }
+
+            std::string old_name;
+
+            bool change_success = change_client_name(
+                client_socket,
+                new_name,
+                old_name
+            );
+
+            if (!change_success) {
+                send_to_client(
+                    client_socket,
+                    "[Server] Username is already in use."
+                );
+
+                continue;
+            }
+
+            std::string rename_message =
+                "[Server] " +
+                old_name +
+                " is now known as " +
+                new_name +
+                ".";
+
+            log_message(rename_message);
+            broadcast_message(rename_message);
+
+            continue;
+        }
 
         std::string echo_packet = message + '\n';
+        std::string client_name = get_client_name(client_socket);
 
         std::string chat_message =
-        "[Client " +
-        std::to_string(client_id) +
+        "[" +
+        client_name +
         "] " +
         message;
 
@@ -552,7 +688,9 @@ int main() {
 
         int client_id = next_client_id++;
 
-        add_client(client_socket);
+        add_client(client_socket,client_id);
+
+
 
         log_message(
             "Client " +
