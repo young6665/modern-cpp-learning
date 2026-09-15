@@ -8,14 +8,23 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <queue>
 
 std::mutex output_mutex;
 std::vector<SOCKET> connected_clients;
 std::mutex clients_mutex;
 std::atomic<bool> server_running{true};
-std::mutex client_thread_mutex;
-std::condition_variable client_thread_cv;
-int active_client_threads = 0;
+
+
+struct ClientTask {
+    SOCKET client_socket;
+    int client_id;
+};
+std::queue<ClientTask> client_tasks;
+std::mutex task_mutex;
+std::condition_variable task_cv;
+bool worker_pool_stopping = false;
+
 
 void log_message(const std::string& text) {
     std::lock_guard<std::mutex> lock(output_mutex);
@@ -29,34 +38,34 @@ void log_error(const std::string& text) {
     std::cerr << text << '\n';
 }
 
-void increase_active_client_threads() {
-    std::lock_guard<std::mutex> lock(
-        client_thread_mutex
-    );
-
-    ++active_client_threads;
-}
-
-void decrease_active_client_threads() {
+void add_client_task(
+    SOCKET client_socket,
+    int client_id
+) {
     {
         std::lock_guard<std::mutex> lock(
-            client_thread_mutex
+            task_mutex
         );
 
-        --active_client_threads;
+        client_tasks.push({
+            client_socket,
+            client_id
+        });
     }
 
-    client_thread_cv.notify_one();
+    task_cv.notify_one();
 }
 
-void wait_for_all_client_threads() {
-    std::unique_lock<std::mutex> lock(
-        client_thread_mutex
-    );
+void stop_worker_pool() {
+    {
+        std::lock_guard<std::mutex> lock(
+            task_mutex
+        );
 
-    while (active_client_threads > 0) {
-        client_thread_cv.wait(lock);
+        worker_pool_stopping = true;
     }
+
+    task_cv.notify_all();
 }
 
 bool send_all(
@@ -339,16 +348,38 @@ void handle_client(
         );
 }
 
-void run_client_handler(
-    SOCKET client_socket,
-    int client_id
-) {
-    handle_client(
-        client_socket,
-        client_id
-    );
+void worker_thread() {
+    while (true) {
+        ClientTask task{};
 
-    decrease_active_client_threads();
+        {
+            std::unique_lock<std::mutex> lock(
+                task_mutex
+            );
+
+            while (
+                client_tasks.empty() &&
+                !worker_pool_stopping
+            ) {
+                task_cv.wait(lock);
+            }
+
+            if (
+                worker_pool_stopping &&
+                client_tasks.empty()
+            ) {
+                return;
+            }
+
+            task = client_tasks.front();
+            client_tasks.pop();
+        }
+
+        handle_client(
+            task.client_socket,
+            task.client_id
+        );
+    }
 }
 
 
@@ -436,7 +467,22 @@ int main() {
     }
 
     std::cout << "Server is listening on 127.0.0.1:8080...\n";
+    //监听
     
+    constexpr int worker_count = 2;
+    std::vector<std::thread> worker_threads;
+    for(int worker_id = 1;
+        worker_id <= worker_count;
+        ++worker_id){
+        worker_threads.emplace_back(worker_thread);
+        log_message(
+            "Worker " +
+            std::to_string(worker_id) +
+            " started."
+        );
+    }
+
+
     int next_client_id = 1;
     log_message("Waiting for clients...");
 
@@ -515,15 +561,7 @@ int main() {
             std::to_string(get_client_count())
         );
 
-        increase_active_client_threads();
-
-        std::thread client_thread(
-            run_client_handler,
-            client_socket,
-            client_id
-        );
-
-    client_thread.detach();
+        add_client_task(client_socket, client_id);
 }
     // main 线程不再使用监听套接字，可以安全关闭
     closesocket(server_socket);
@@ -531,7 +569,13 @@ int main() {
     // 让所有阻塞在 recv() 的客户端线程退出
     shutdown_all_clients();
 
-    wait_for_all_client_threads();
+    stop_worker_pool();
+
+    for(std::thread& worker : worker_threads){
+        if(worker.joinable()){
+            worker.join();
+        }
+    }
 
     WSACleanup();
 
