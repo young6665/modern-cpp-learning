@@ -7,13 +7,15 @@
 #include <mutex>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 
 std::mutex output_mutex;
-
 std::vector<SOCKET> connected_clients;
 std::mutex clients_mutex;
-
 std::atomic<bool> server_running{true};
+std::mutex client_thread_mutex;
+std::condition_variable client_thread_cv;
+int active_client_threads = 0;
 
 void log_message(const std::string& text) {
     std::lock_guard<std::mutex> lock(output_mutex);
@@ -25,6 +27,36 @@ void log_error(const std::string& text) {
     std::lock_guard<std::mutex> lock(output_mutex);
 
     std::cerr << text << '\n';
+}
+
+void increase_active_client_threads() {
+    std::lock_guard<std::mutex> lock(
+        client_thread_mutex
+    );
+
+    ++active_client_threads;
+}
+
+void decrease_active_client_threads() {
+    {
+        std::lock_guard<std::mutex> lock(
+            client_thread_mutex
+        );
+
+        --active_client_threads;
+    }
+
+    client_thread_cv.notify_one();
+}
+
+void wait_for_all_client_threads() {
+    std::unique_lock<std::mutex> lock(
+        client_thread_mutex
+    );
+
+    while (active_client_threads > 0) {
+        client_thread_cv.wait(lock);
+    }
 }
 
 bool send_all(
@@ -56,6 +88,7 @@ bool send_all(
 enum class ReceiveStatus{
     success,
     disconnected,
+    server_stopping,
     error
 };
 
@@ -65,6 +98,11 @@ ReceiveStatus receive_line(
     std::string& message
 ) {
     while (true) {
+        // 服务器准备关闭，当前客户端线程也结束
+        if (!server_running) {
+            return ReceiveStatus::server_stopping;
+        }
+
         std::size_t newline_position =
             pending_data.find('\n');
 
@@ -82,6 +120,40 @@ ReceiveStatus receive_line(
             return ReceiveStatus::success;
         }
 
+        // 最多等待200毫秒，检查socket是否有数据
+        fd_set read_sockets;
+        FD_ZERO(&read_sockets);
+        FD_SET(socket_handle, &read_sockets);
+
+        timeval timeout{};
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 200000;
+
+        int ready_count = select(
+            0,
+            &read_sockets,
+            nullptr,
+            nullptr,
+            &timeout
+        );
+
+        if (ready_count == SOCKET_ERROR) {
+            if (!server_running) {
+                return ReceiveStatus::server_stopping;
+            }
+
+            return ReceiveStatus::error;
+        }
+
+        // 没有数据，重新回到循环顶部检查server_running
+        if (ready_count == 0) {
+            continue;
+        }
+
+        if (!FD_ISSET(socket_handle, &read_sockets)) {
+            continue;
+        }
+
         char buffer[1024]{};
 
         int bytes_received = recv(
@@ -93,9 +165,13 @@ ReceiveStatus receive_line(
 
         if (bytes_received == 0) {
             return ReceiveStatus::disconnected;
-        } 
+        }
 
         if (bytes_received == SOCKET_ERROR) {
+            if (!server_running) {
+                return ReceiveStatus::server_stopping;
+            }
+
             return ReceiveStatus::error;
         }
 
@@ -181,6 +257,10 @@ void handle_client(
             message
         );
 
+        if (receive_status == ReceiveStatus::server_stopping) {
+            break;
+        }
+
         if (receive_status == ReceiveStatus::error) {
             log_error(
                 "[Client " +
@@ -200,6 +280,8 @@ void handle_client(
             );
             break;
         }
+
+
 
         log_message(
             "[Client " +
@@ -257,6 +339,17 @@ void handle_client(
         );
 }
 
+void run_client_handler(
+    SOCKET client_socket,
+    int client_id
+) {
+    handle_client(
+        client_socket,
+        client_id
+    );
+
+    decrease_active_client_threads();
+}
 
 
 int main() {
@@ -344,7 +437,6 @@ int main() {
 
     std::cout << "Server is listening on 127.0.0.1:8080...\n";
     
-    std::vector<std::thread> client_threads;
     int next_client_id = 1;
     log_message("Waiting for clients...");
 
@@ -423,28 +515,23 @@ int main() {
             std::to_string(get_client_count())
         );
 
-        client_threads.emplace_back(
-            handle_client,
+        increase_active_client_threads();
+
+        std::thread client_thread(
+            run_client_handler,
             client_socket,
             client_id
         );
 
-        log_message(
-        "Stored thread objects: " +
-        std::to_string(client_threads.size())
-        );
-    }
+    client_thread.detach();
+}
     // main 线程不再使用监听套接字，可以安全关闭
     closesocket(server_socket);
 
     // 让所有阻塞在 recv() 的客户端线程退出
     shutdown_all_clients();
 
-    for (std::thread& client_thread : client_threads) {
-        if (client_thread.joinable()) {
-            client_thread.join();
-        }
-    }
+    wait_for_all_client_threads();
 
     WSACleanup();
 
