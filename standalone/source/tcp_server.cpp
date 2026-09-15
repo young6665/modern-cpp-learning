@@ -16,6 +16,7 @@ std::vector<SOCKET> connected_clients;
 std::mutex clients_mutex;
 std::atomic<bool> server_running{true};
 std::unordered_map<SOCKET, std::string> client_names;
+std::unordered_map<SOCKET, bool> client_logged_in;
 
 
 struct ClientTask {
@@ -225,6 +226,8 @@ void add_client(
     client_names[client_socket] =
         "Client " +
         std::to_string(client_id);
+
+    client_logged_in[client_socket] = false;
 }
 
 void remove_client(SOCKET client_socket) {
@@ -241,6 +244,7 @@ void remove_client(SOCKET client_socket) {
     }
 
     client_names.erase(client_socket);
+    client_logged_in.erase(client_socket);
 }
 
 std::size_t get_client_count() {
@@ -304,8 +308,27 @@ bool change_client_name(
         }
     old_name = name_position -> second;
     name_position ->second = new_name;
+    client_logged_in[client_socket] = true;
 
     return true;
+}
+
+bool is_client_logged_in(
+    SOCKET client_socket
+) {
+    std::lock_guard<std::mutex> lock(
+        clients_mutex
+    );
+
+    auto login_position =
+        client_logged_in.find(client_socket);
+
+    if (login_position ==
+        client_logged_in.end()) {
+        return false;
+    }
+
+    return login_position->second;
 }
 
 void handle_client(
@@ -353,8 +376,6 @@ void handle_client(
             break;
         }
 
-
-
         log_message(
             "[Client " +
             std::to_string(client_id) +
@@ -371,18 +392,6 @@ void handle_client(
             break;
         }
 
-        if (message == "/shutdown") {
-            log_message(
-                "[Client " +
-                std::to_string(client_id) +
-                "] requested server shutdown."
-            );
-            broadcast_message("[Server] shutting down.");
-
-            server_running = false;
-            break;
-        }
-
         if (message == "/name") {
             send_to_client(
                 client_socket,
@@ -391,6 +400,8 @@ void handle_client(
 
             continue;
         }
+
+
 
         const std::string name_command = "/name ";
 
@@ -443,35 +454,58 @@ void handle_client(
                 continue;
             }
 
-            std::string rename_message =
+        std::string rename_message =
                 "[Server] " +
                 old_name +
                 " is now known as " +
                 new_name +
                 ".";
+        client_logged_in[client_socket] = true;
 
-            log_message(rename_message);
-            broadcast_message(rename_message);
+        log_message(rename_message);
+        broadcast_message(rename_message);
+
 
             continue;
-        }
+    }
 
-        std::string echo_packet = message + '\n';
-        std::string client_name = get_client_name(client_socket);
+    if (!is_client_logged_in(client_socket)) {
+            send_to_client(
+        client_socket,
+        "[Server] Please set your username first."
+        );
 
-        std::string chat_message =
+        continue;
+    }
+
+    if (message == "/shutdown") {
+        log_message(
+                "[Client " +
+                std::to_string(client_id) +
+                "] requested server shutdown."
+            );
+        broadcast_message("[Server] shutting down.");
+
+        server_running = false;
+        break;
+    }    
+
+    std::string echo_packet = message + '\n';
+    std::string client_name = get_client_name(client_socket);
+
+    std::string chat_message =
         "[" +
         client_name +
         "] " +
         message;
 
-        broadcast_message(chat_message);
+    broadcast_message(chat_message);
 
-        log_message(
+    log_message(
             "[Client " +
             std::to_string(client_id) +
             "] message broadcasted."
-        );  
+    );  
     }
         remove_client(client_socket);
         closesocket(client_socket);
@@ -689,6 +723,8 @@ int main() {
         int client_id = next_client_id++;
 
         add_client(client_socket,client_id);
+        send_to_client(client_socket,
+        "[Server] Please set your username with /name <username>");
 
 
 
