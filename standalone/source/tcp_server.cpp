@@ -519,28 +519,66 @@ bool is_client_logged_in(
     return login_position->second;
 }
 
-std::vector<std::string> get_logged_in_users(){
-    std::lock_guard<std::mutex> lock(clients_mutex);
+std::vector<std::string> get_users_in_room(
+    const std::string& room_name
+) {
+    std::lock_guard<std::mutex> lock(
+        clients_mutex
+    );
+
     std::vector<std::string> users;
 
-    for(const auto& name_entry : client_names){
-        SOCKET client_socket = name_entry.first;
+    for (const auto& name_entry :
+         client_names) {
+        SOCKET client_socket =
+            name_entry.first;
 
-        auto login_position = client_logged_in.find(client_socket);
-        if(login_position != client_logged_in.end() && login_position  -> second){
-            users.push_back(name_entry.second);
+        auto login_position =
+            client_logged_in.find(
+                client_socket
+            );
+
+        auto room_position =
+            client_rooms.find(
+                client_socket
+            );
+
+        bool logged_in =
+            login_position !=
+                client_logged_in.end() &&
+            login_position->second;
+
+        bool in_target_room =
+            room_position !=
+                client_rooms.end() &&
+            room_position->second ==
+                room_name;
+
+        if (logged_in && in_target_room) {
+            users.push_back(
+                name_entry.second
+            );
         }
     }
-    std::sort(users.begin(),users.end());
+
+    std::sort(
+        users.begin(),
+        users.end()
+    );
+
     return users;
 }
 
-std::string make_user_list_message() {
+std::string make_user_list_message(
+    const std::string& room_name
+) {
     std::vector<std::string> users =
-        get_logged_in_users();
+        get_users_in_room(room_name);
 
     std::string message =
-        "[Server] Online users (" +
+        "[Server] Users in " +
+        room_name +
+        " (" +
         std::to_string(users.size()) +
         "): ";
 
@@ -806,18 +844,12 @@ void handle_client(
         continue;
     }
 
-    if (message == "/rooms") {
-    send_to_client(
-        client_socket,
-        make_room_list_message()
-    );
-
-    continue;
-    }
+    
 
     if(message == "/users"){
-        std::string user_list_message = make_user_list_message();
-        send_to_client(client_socket,user_list_message);
+        std::string room_name =
+        get_client_room(client_socket);
+        send_to_client(client_socket,make_user_list_message(room_name));
         continue;
     }
 
