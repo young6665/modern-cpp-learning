@@ -12,6 +12,11 @@
 #include <unordered_map>
 #include <fstream>
 #include <exception>
+#include <chrono>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 
 struct ServerConfig {
     std::string ip_address = "127.0.0.1";
@@ -43,7 +48,6 @@ std::string trim(const std::string& text) {
 
 
 
-std::mutex output_mutex;
 std::vector<SOCKET> connected_clients;
 std::mutex clients_mutex;
 std::atomic<bool> server_running{true};
@@ -62,16 +66,89 @@ std::condition_variable task_cv;
 bool worker_pool_stopping = false;
 
 
-void log_message(const std::string& text) {
-    std::lock_guard<std::mutex> lock(output_mutex);
+std::mutex output_mutex;
 
-    std::cout << text << '\n';
+const std::string server_log_path =
+    "standalone/server.log";
+
+std::string get_current_time() {
+    auto now =
+        std::chrono::system_clock::now();
+
+    std::time_t current_time =
+        std::chrono::system_clock::to_time_t(
+            now
+        );
+
+    std::tm local_time{};
+
+    localtime_s(
+        &local_time,
+        &current_time
+    );
+
+    std::ostringstream time_stream;
+
+    time_stream << std::put_time(
+        &local_time,
+        "%Y-%m-%d %H:%M:%S"
+    );
+
+    return time_stream.str();
+}
+
+void write_log(
+    const std::string& level,
+    const std::string& text,
+    bool is_error
+) {
+    std::lock_guard<std::mutex> lock(
+        output_mutex
+    );
+
+    std::string log_line =
+        "[" +
+        get_current_time() +
+        "] [" +
+        level +
+        "] " +
+        text;
+
+    if (is_error) {
+        std::cerr << log_line << '\n';
+    } else {
+        std::cout << log_line << '\n';
+    }
+
+    std::ofstream log_file(
+        server_log_path,
+        std::ios::app
+    );
+
+    if (!log_file.is_open()) {
+        std::cerr
+            << "Could not open server log file.\n";
+
+        return;
+    }
+
+    log_file << log_line << '\n';
+}
+
+void log_message(const std::string& text) {
+    write_log(
+        "INFO",
+        text,
+        false
+    );
 }
 
 void log_error(const std::string& text) {
-    std::lock_guard<std::mutex> lock(output_mutex);
-
-    std::cerr << text << '\n';
+    write_log(
+        "ERROR",
+        text,
+        true
+    );
 }
 
 bool load_server_config(
