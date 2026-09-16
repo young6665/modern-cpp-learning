@@ -1,52 +1,74 @@
-#include <greeter/greeter.h>
-#include <greeter/version.h>
+#include <minichat/message_store.h>
+#include <minichat/command.h>
 
-#include <cxxopts.hpp>
 #include <iostream>
 #include <string>
-#include <unordered_map>
 
-auto main(int argc, char** argv) -> int {
-  const std::unordered_map<std::string, greeter::LanguageCode> languages{
-      {"en", greeter::LanguageCode::EN}, {"de", greeter::LanguageCode::DE},
-      {"es", greeter::LanguageCode::ES}, {"fr", greeter::LanguageCode::FR},
-      {"zh", greeter::LanguageCode::ZH},
-  };
+minichat::Message read_message(const std::string& sender) {
+    minichat::Message msg;
+    msg.sender = sender;
 
-  cxxopts::Options options(*argv, "A program to welcome the world!");
+    std::cout << "Message: ";
+    std::getline(std::cin, msg.content);
 
-  std::string language;
-  std::string name;
+    return msg;
+}
 
-  // clang-format off
-  options.add_options()
-    ("h,help", "Show help")
-    ("v,version", "Print the current version number")
-    ("n,name", "Name to greet", cxxopts::value(name)->default_value("World"))
-    ("l,lang", "Language code to use", cxxopts::value(language)->default_value("en"))
-  ;
-  // clang-format on
+int main() {
+    minichat::MessageStore store;
+    std::string sender;
 
-  auto result = options.parse(argc, argv);
+    std::cout << "Sender: ";
+    std::getline(std::cin, sender);
 
-  if (result["help"].as<bool>()) {
-    std::cout << options.help() << std::endl;
+    while (true) {
+        minichat::Message message = read_message(sender);
+        const minichat::Command command = 
+            minichat::parse_command(message.content);
+
+        if (command == minichat::Command::quit) {
+            break;
+        }
+
+        if (command == minichat::Command::list){
+            store.print_all();
+            continue;
+        }
+
+        if (command == minichat::Command::count) {
+            std::cout << "Message count: "
+                      << store.size()
+                      << '\n';
+            continue;
+        }
+
+        if (command == minichat::Command::clear){
+            store.clear();
+            std::cout << "All message cleared.\n";
+            continue;
+        }
+
+        if (command == minichat::Command::help) {
+            std::cout << "Commands:\n"
+              << "  /list  - Show all messages\n"
+              << "  /count - Show message count\n"
+              << "  /clear - Clear all messages\n"
+              << "  /quit  - Exit\n";
+             continue;        
+
+        if (!store.add(message)) {
+            std::cout << "Message cannot be empty.\n";
+            continue;
+        }
+}
+
+
+    }
+
+    store.print_all();
+
+    std::cout << "\nPress Enter to exit...";
+    std::cin.get();
+
     return 0;
-  }
-
-  if (result["version"].as<bool>()) {
-    std::cout << "Greeter, version " << GREETER_VERSION << std::endl;
-    return 0;
-  }
-
-  auto langIt = languages.find(language);
-  if (langIt == languages.end()) {
-    std::cerr << "unknown language code: " << language << std::endl;
-    return 1;
-  }
-
-  greeter::Greeter greeter(name);
-  std::cout << greeter.greet(langIt->second) << std::endl;
-
-  return 0;
 }
