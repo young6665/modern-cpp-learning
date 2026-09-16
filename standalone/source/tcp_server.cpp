@@ -331,6 +331,49 @@ bool is_client_logged_in(
     return login_position->second;
 }
 
+std::vector<std::string> get_logged_in_users(){
+    std::lock_guard<std::mutex> lock(clients_mutex);
+    std::vector<std::string> users;
+
+    for(const auto& name_entry : client_names){
+        SOCKET client_socket = name_entry.first;
+
+        auto login_position = client_logged_in.find(client_socket);
+        if(login_position != client_logged_in.end() && login_position  -> second){
+            users.push_back(name_entry.second);
+        }
+    }
+    std::sort(users.begin(),users.end());
+    return users;
+}
+
+std::string make_user_list_message() {
+    std::vector<std::string> users =
+        get_logged_in_users();
+
+    std::string message =
+        "[Server] Online users (" +
+        std::to_string(users.size()) +
+        "): ";
+
+    if (users.empty()) {
+        message += "none";
+        return message;
+    }
+
+    for (std::size_t index = 0;
+         index < users.size();
+         ++index) {
+        if (index > 0) {
+            message += ", ";
+        }
+
+        message += users[index];
+    }
+
+    return message;
+}
+
 void handle_client(
     SOCKET client_socket,
     int client_id
@@ -475,6 +518,12 @@ void handle_client(
         "[Server] Please set your username first."
         );
 
+        continue;
+    }
+
+    if(message == "/users"){
+        std::string user_list_message = make_user_list_message();
+        send_to_client(client_socket,user_list_message);
         continue;
     }
 
