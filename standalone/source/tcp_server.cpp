@@ -1099,11 +1099,15 @@ void worker_thread() {
 
 int main() {
     ServerConfig config;
-     bool config_loaded =
-        load_server_config(
-            "standalone/server.conf",
-            config
-        );
+
+    bool config_loaded =
+    load_server_config(
+        "standalone/server.conf",
+        config
+    );
+    set_log_file_path(
+        config.log_file_path
+    );
 
     if (config_loaded) {
         log_message(
