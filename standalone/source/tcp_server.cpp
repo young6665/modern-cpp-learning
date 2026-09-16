@@ -11,6 +11,12 @@
 #include <queue>
 #include <unordered_map>
 
+struct ServerConfig {
+    std::string ip_address = "127.0.0.1";
+    unsigned short port = 8080;
+    int worker_count = 2;
+    int listen_backlog = 16;
+};
 std::mutex output_mutex;
 std::vector<SOCKET> connected_clients;
 std::mutex clients_mutex;
@@ -937,6 +943,7 @@ void worker_thread() {
 
 
 int main() {
+    ServerConfig config;
     WSADATA wsa_data{};
 
     int result = WSAStartup(
@@ -973,11 +980,11 @@ int main() {
     sockaddr_in server_address{};
 
     server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(8080);
+    server_address.sin_port = htons(config.port);
 
     int address_result = inet_pton(
         AF_INET,
-        "127.0.0.1",
+        config.ip_address.c_str(),
         &server_address.sin_addr
     );
 
@@ -1005,9 +1012,15 @@ int main() {
         return 1;
     }
 
-    std::cout << "Socket bound to 127.0.0.1:8080 successfully.\n";
+    log_message(
+    "Socket bound to " +
+    config.ip_address +
+    ":" +
+    std::to_string(config.port) +
+    " successfully."
+    );
 
-    int listen_result = listen(server_socket, 1);
+    int listen_result = listen(server_socket, config.listen_backlog);
 
     if (listen_result == SOCKET_ERROR) {
         std::cerr << "Listen failed: "
@@ -1019,15 +1032,23 @@ int main() {
         return 1;
     }
 
-    std::cout << "Server is listening on 127.0.0.1:8080...\n";
+    log_message(
+    "Server is listening on " +
+    config.ip_address +
+    ":" +
+    std::to_string(config.port) +
+    "..."
+    );
     //监听
     
-    constexpr int worker_count = 2;
     std::vector<std::thread> worker_threads;
-    for(int worker_id = 1;
-        worker_id <= worker_count;
-        ++worker_id){
-        worker_threads.emplace_back(worker_thread);
+    for (int worker_id = 1;
+        worker_id <= config.worker_count;
+        ++worker_id) {
+        worker_threads.emplace_back(
+            worker_thread
+        );
+
         log_message(
             "Worker " +
             std::to_string(worker_id) +
