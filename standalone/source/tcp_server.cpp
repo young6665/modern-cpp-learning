@@ -17,6 +17,7 @@ std::mutex clients_mutex;
 std::atomic<bool> server_running{true};
 std::unordered_map<SOCKET, std::string> client_names;
 std::unordered_map<SOCKET, bool> client_logged_in;
+std::unordered_map<SOCKET, std::string> client_rooms;
 
 
 struct ClientTask {
@@ -228,6 +229,8 @@ void add_client(
         std::to_string(client_id);
 
     client_logged_in[client_socket] = false;
+
+    client_rooms[client_socket] = "lobby";
 }
 
 void remove_client(SOCKET client_socket) {
@@ -245,6 +248,191 @@ void remove_client(SOCKET client_socket) {
 
     client_names.erase(client_socket);
     client_logged_in.erase(client_socket);
+    client_rooms.erase(client_socket);
+}
+
+std::string get_client_room(
+    SOCKET client_socket
+) {
+    std::lock_guard<std::mutex> lock(
+        clients_mutex
+    );
+
+    auto room_position =
+        client_rooms.find(client_socket);
+
+    if (room_position == client_rooms.end()) {
+        return "";
+    }
+
+    return room_position->second;
+}
+
+bool change_client_room(
+    SOCKET client_socket,
+    const std::string& new_room,
+    std::string& old_room
+) {
+    std::lock_guard<std::mutex> lock(
+        clients_mutex
+    );
+
+    auto room_position =
+        client_rooms.find(client_socket);
+
+    if (room_position == client_rooms.end()) {
+        return false;
+    }
+
+    old_room = room_position->second;
+    room_position->second = new_room;
+
+    return true;
+}
+
+void broadcast_to_room(
+    const std::string& room_name,
+    const std::string& message
+) {
+    std::string message_packet =
+        message + '\n';
+
+    std::lock_guard<std::mutex> lock(
+        clients_mutex
+    );
+
+    for (SOCKET target_socket :
+         connected_clients) {
+        auto login_position =
+
+            client_logged_in.find(
+                target_socket
+            );
+
+        auto room_position =
+            client_rooms.find(
+                target_socket
+            );
+
+        bool logged_in =
+            login_position !=
+                client_logged_in.end() &&
+            login_position->second;
+
+        bool in_target_room =
+            room_position !=
+                client_rooms.end() &&
+            room_position->second ==
+                room_name;
+
+        if (!logged_in || !in_target_room) {
+            continue;
+        }
+
+        bool send_success = send_all(
+            target_socket,
+            message_packet.c_str(),
+            static_cast<int>(
+                message_packet.size()
+            )
+        );
+
+        if (!send_success) {
+            log_error(
+                "Room broadcast failed: " +
+                std::to_string(
+                    WSAGetLastError()
+                )
+            );
+        }
+    }
+}
+
+std::vector<std::string> get_room_summaries() {
+    std::unordered_map<
+        std::string,
+        std::size_t
+    > room_counts;
+
+    {
+        std::lock_guard<std::mutex> lock(
+            clients_mutex
+        );
+
+        for (const auto& room_entry :
+             client_rooms) {
+            SOCKET client_socket =
+                room_entry.first;
+
+            auto login_position =
+                client_logged_in.find(
+                    client_socket
+                );
+
+            bool logged_in =
+                login_position !=
+                    client_logged_in.end() &&
+                login_position->second;
+
+            if (!logged_in) {
+                continue;
+            }
+
+            const std::string& room_name =
+                room_entry.second;
+
+            ++room_counts[room_name];
+        }
+    }
+
+    std::vector<std::string> summaries;
+
+    for (const auto& count_entry :
+         room_counts) {
+        std::string summary =
+            count_entry.first +
+            " (" +
+            std::to_string(
+                count_entry.second
+            ) +
+            ")";
+
+        summaries.push_back(summary);
+    }
+
+    std::sort(
+        summaries.begin(),
+        summaries.end()
+    );
+
+    return summaries;
+}
+
+std::string make_room_list_message() {
+    std::vector<std::string> rooms =
+        get_room_summaries();
+
+    std::string message =
+        "[Server] Rooms (" +
+        std::to_string(rooms.size()) +
+        "): ";
+
+    if (rooms.empty()) {
+        message += "none";
+        return message;
+    }
+
+    for (std::size_t index = 0;
+         index < rooms.size();
+         ++index) {
+        if (index > 0) {
+            message += ", ";
+        }
+
+        message += rooms[index];
+    }
+
+    return message;
 }
 
 std::size_t get_client_count() {
@@ -521,6 +709,112 @@ void handle_client(
         continue;
     }
 
+    if (message == "/join") {
+    send_to_client(
+        client_socket,
+        "[Server] Usage: /join <room>"
+    );
+
+    continue;
+    }
+
+    const std::string join_command = "/join ";
+
+    if (message.rfind(join_command, 0) == 0) {
+        std::string new_room = message.substr(
+            join_command.size()
+        );
+
+        if (new_room.empty()) {
+            send_to_client(
+                client_socket,
+                "[Server] Room name cannot be empty."
+            );
+
+            continue;
+        }
+
+        if (new_room.size() > 16) {
+            send_to_client(
+                client_socket,
+                "[Server] Room name cannot exceed 16 characters."
+            );
+
+            continue;
+        }
+
+        if (new_room.find(' ') !=
+            std::string::npos) {
+            send_to_client(
+                client_socket,
+                "[Server] Room name cannot contain spaces."
+            );
+
+            continue;
+        }
+
+        std::string current_room =
+            get_client_room(client_socket);
+
+        if (current_room == new_room) {
+            send_to_client(
+                client_socket,
+                "[Server] You are already in room " +
+                new_room +
+                "."
+            );
+
+            continue;
+        }
+
+        std::string old_room;
+
+        bool change_success = change_client_room(
+            client_socket,
+            new_room,
+            old_room
+        );
+
+        if (!change_success) {
+            send_to_client(
+                client_socket,
+                "[Server] Failed to change room."
+            );
+
+            continue;
+        }
+
+        std::string client_name =
+            get_client_name(client_socket);
+
+        broadcast_to_room(
+            old_room,
+            "[Server] " +
+            client_name +
+            " left the room."
+        );
+
+        broadcast_to_room(
+            new_room,
+            "[Server] " +
+            client_name +
+            " joined room " +
+            new_room +
+            "."
+        );
+
+        continue;
+    }
+
+    if (message == "/rooms") {
+    send_to_client(
+        client_socket,
+        make_room_list_message()
+    );
+
+    continue;
+    }
+
     if(message == "/users"){
         std::string user_list_message = make_user_list_message();
         send_to_client(client_socket,user_list_message);
@@ -542,13 +836,21 @@ void handle_client(
     std::string echo_packet = message + '\n';
     std::string client_name = get_client_name(client_socket);
 
+    std::string room_name =
+    get_client_room(client_socket);
+
     std::string chat_message =
         "[" +
+        room_name +
+        "][" +
         client_name +
         "] " +
         message;
 
-    broadcast_message(chat_message);
+    broadcast_to_room(
+        room_name,
+        chat_message
+    );
 
     log_message(
             "[Client " +
