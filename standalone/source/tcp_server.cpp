@@ -17,12 +17,15 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <minichat/logger.h>
 
 struct ServerConfig {
     std::string ip_address = "127.0.0.1";
     unsigned short port = 8080;
     int worker_count = 2;
     int listen_backlog = 16;
+    std::string log_file_path =
+        "standalone/server.log";
 };
 
 std::string trim(const std::string& text) {
@@ -64,217 +67,6 @@ std::queue<ClientTask> client_tasks;
 std::mutex task_mutex;
 std::condition_variable task_cv;
 bool worker_pool_stopping = false;
-
-
-std::mutex output_mutex;
-
-const std::string server_log_path =
-    "standalone/server.log";
-
-std::string get_current_time() {
-    auto now =
-        std::chrono::system_clock::now();
-
-    std::time_t current_time =
-        std::chrono::system_clock::to_time_t(
-            now
-        );
-
-    std::tm local_time{};
-
-    localtime_s(
-        &local_time,
-        &current_time
-    );
-
-    std::ostringstream time_stream;
-
-    time_stream << std::put_time(
-        &local_time,
-        "%Y-%m-%d %H:%M:%S"
-    );
-
-    return time_stream.str();
-}
-
-void write_log(
-    const std::string& level,
-    const std::string& text,
-    bool is_error
-) {
-    std::lock_guard<std::mutex> lock(
-        output_mutex
-    );
-
-    std::string log_line =
-        "[" +
-        get_current_time() +
-        "] [" +
-        level +
-        "] " +
-        text;
-
-    if (is_error) {
-        std::cerr << log_line << '\n';
-    } else {
-        std::cout << log_line << '\n';
-    }
-
-    std::ofstream log_file(
-        server_log_path,
-        std::ios::app
-    );
-
-    if (!log_file.is_open()) {
-        std::cerr
-            << "Could not open server log file.\n";
-
-        return;
-    }
-
-    log_file << log_line << '\n';
-}
-
-void log_message(const std::string& text) {
-    write_log(
-        "INFO",
-        text,
-        false
-    );
-}
-
-void log_error(const std::string& text) {
-    write_log(
-        "ERROR",
-        text,
-        true
-    );
-}
-
-bool load_server_config(
-    const std::string& file_path,
-    ServerConfig& config
-) {
-    std::ifstream config_file(
-        file_path
-    );
-
-    if (!config_file.is_open()) {
-        log_error(
-            "Could not open configuration file: " +
-            file_path
-        );
-
-        return false;
-    }
-
-    // 先修改临时副本，读取成功后再覆盖原配置
-    ServerConfig loaded_config = config;
-
-    std::string line;
-    int line_number = 0;
-
-    while (std::getline(config_file, line)) {
-        ++line_number;
-
-        line = trim(line);
-
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-
-        std::size_t equal_position =
-            line.find('=');
-
-        if (equal_position ==
-            std::string::npos) {
-            log_error(
-                "Invalid configuration line " +
-                std::to_string(line_number) +
-                ": missing ="
-            );
-
-            return false;
-        }
-
-        std::string key = trim(
-            line.substr(
-                0,
-                equal_position
-            )
-        );
-
-        std::string value = trim(
-            line.substr(
-                equal_position + 1
-            )
-        );
-
-        try {
-            if (key == "ip_address") {
-                loaded_config.ip_address =
-                    value;
-            } else if (key == "port") {
-                int port = std::stoi(value);
-
-                if (port < 1 || port > 65535) {
-                    throw std::out_of_range(
-                        "invalid port"
-                    );
-                }
-
-                loaded_config.port =
-                    static_cast<unsigned short>(
-                        port
-                    );
-            } else if (key == "worker_count") {
-                int worker_count =
-                    std::stoi(value);
-
-                if (
-                    worker_count < 1 ||
-                    worker_count > 64
-                ) {
-                    throw std::out_of_range(
-                        "invalid worker count"
-                    );
-                }
-
-                loaded_config.worker_count =
-                    worker_count;
-            } else if (key == "listen_backlog") {
-                int listen_backlog =
-                    std::stoi(value);
-
-                if (listen_backlog < 1) {
-                    throw std::out_of_range(
-                        "invalid backlog"
-                    );
-                }
-
-                loaded_config.listen_backlog =
-                    listen_backlog;
-            } else {
-                log_error(
-                    "Unknown configuration key: " +
-                    key
-                );
-
-                return false;
-            }
-        } catch (const std::exception&) {
-            log_error(
-                "Invalid configuration value on line " +
-                std::to_string(line_number)
-            );
-
-            return false;
-        }
-    }
-
-    config = loaded_config;
-    return true;
-}
 
 
 void add_client_task(
@@ -1134,6 +926,140 @@ void handle_client(
             "] connection closed. Online clients: " +
             std::to_string(get_client_count())
         );
+}
+
+bool load_server_config(
+    const std::string& file_path,
+    ServerConfig& config
+) {
+    std::ifstream config_file(
+        file_path
+    );
+
+    if (!config_file.is_open()) {
+        log_error(
+            "Could not open configuration file: " +
+            file_path
+        );
+
+        return false;
+    }
+
+    // 先修改临时副本，读取成功后再覆盖原配置
+    ServerConfig loaded_config = config;
+
+    std::string line;
+    int line_number = 0;
+
+    while (std::getline(config_file, line)) {
+        ++line_number;
+
+        line = trim(line);
+
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+
+        std::size_t equal_position =
+            line.find('=');
+
+        if (equal_position ==
+            std::string::npos) {
+            log_error(
+                "Invalid configuration line " +
+                std::to_string(line_number) +
+                ": missing ="
+            );
+
+            return false;
+        }
+
+        std::string key = trim(
+            line.substr(
+                0,
+                equal_position
+            )
+        );
+
+        std::string value = trim(
+            line.substr(
+                equal_position + 1
+            )
+        );
+
+        try {
+            if (key == "ip_address") {
+                loaded_config.ip_address =
+                    value;
+            } else if (key == "port") {
+                int port = std::stoi(value);
+
+                if (port < 1 || port > 65535) {
+                    throw std::out_of_range(
+                        "invalid port"
+                    );
+                }
+
+                loaded_config.port =
+                    static_cast<unsigned short>(
+                        port
+                    );
+            } else if (key == "worker_count") {
+                int worker_count =
+                    std::stoi(value);
+
+                if (
+                    worker_count < 1 ||
+                    worker_count > 64
+                ) {
+                    throw std::out_of_range(
+                        "invalid worker count"
+                    );
+                }
+
+                loaded_config.worker_count =
+                    worker_count;
+            } else if (key == "listen_backlog") {
+                int listen_backlog =
+                    std::stoi(value);
+
+                if (listen_backlog < 1) {
+                    throw std::out_of_range(
+                        "invalid backlog"
+                    );
+                }
+
+                loaded_config.listen_backlog =
+                    listen_backlog;
+            }else if (key == "log_file_path") {
+                if (value.empty()) {
+                    throw std::invalid_argument(
+                        "empty log file path"
+                    );
+                }
+
+                loaded_config.log_file_path =
+                value;
+            }else {
+                log_error(
+                    "Unknown configuration key: " +
+                    key
+                );
+
+                return false;
+            }
+        } catch (const std::exception&) {
+            log_error(
+                "Invalid configuration value on line " +
+                std::to_string(line_number)
+            );
+
+            return false;
+        }
+    }
+
+    config = loaded_config;
+    return true;
 }
 
 void worker_thread() {

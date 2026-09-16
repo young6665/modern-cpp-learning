@@ -45,7 +45,7 @@ target_link_libraries(
     cxxopts
 )
 
-target_link_libraries(TcpServer PRIVATE ws2_32)
+target_link_libraries(TcpServer PRIVATE Greeter::Greeter ws2_32)
 target_link_libraries(TcpClient PRIVATE ws2_32)
 
 if(MSVC)
