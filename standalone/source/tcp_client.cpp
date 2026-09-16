@@ -5,9 +5,17 @@
 #include <mutex>
 #include <atomic>
 #include <thread>
+#include <fstream>
+#include <exception>
+#include <stdexcept>
 
+struct ClientConfig {
+    std::string server_ip_address =
+        "127.0.0.1";
+
+    unsigned short server_port = 8080;
+};
 std::atomic<bool> client_running{true};
-
 std::mutex client_output_mutex;
 
 bool send_all(
@@ -105,6 +113,130 @@ void print_client_error(const std::string& text) {
     std::cerr << text << '\n';
 }
 
+std::string trim(const std::string& text) {
+    std::size_t first =
+        text.find_first_not_of(
+            " \t\r\n"
+        );
+
+    if (first == std::string::npos) {
+        return "";
+    }
+
+    std::size_t last =
+        text.find_last_not_of(
+            " \t\r\n"
+        );
+
+    return text.substr(
+        first,
+        last - first + 1
+    );
+}
+
+bool load_client_config(
+    const std::string& file_path,
+    ClientConfig& config
+) {
+    std::ifstream config_file(
+        file_path
+    );
+
+    if (!config_file.is_open()) {
+        print_client_error(
+            "Could not open client configuration file: " +
+            file_path
+        );
+
+        return false;
+    }
+
+    ClientConfig loaded_config = config;
+
+    std::string line;
+    int line_number = 0;
+
+    while (std::getline(config_file, line)) {
+        ++line_number;
+
+        line = trim(line);
+
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+
+        std::size_t equal_position =
+            line.find('=');
+
+        if (equal_position ==
+            std::string::npos) {
+            print_client_error(
+                "Invalid client configuration line " +
+                std::to_string(line_number) +
+                ": missing ="
+            );
+
+            return false;
+        }
+
+        std::string key = trim(
+            line.substr(
+                0,
+                equal_position
+            )
+        );
+
+        std::string value = trim(
+            line.substr(
+                equal_position + 1
+            )
+        );
+
+        try {
+            if (key == "server_ip_address") {
+                if (value.empty()) {
+                    throw std::invalid_argument(
+                        "empty IP address"
+                    );
+                }
+
+                loaded_config.server_ip_address =
+                    value;
+            } else if (key == "server_port") {
+                int port = std::stoi(value);
+
+                if (port < 1 || port > 65535) {
+                    throw std::out_of_range(
+                        "invalid port"
+                    );
+                }
+
+                loaded_config.server_port =
+                    static_cast<unsigned short>(
+                        port
+                    );
+            } else {
+                print_client_error(
+                    "Unknown client configuration key: " +
+                    key
+                );
+
+                return false;
+            }
+        } catch (const std::exception&) {
+            print_client_error(
+                "Invalid client configuration value on line " +
+                std::to_string(line_number)
+            );
+
+            return false;
+        }
+    }
+
+    config = loaded_config;
+    return true;
+}
+
 
 void receive_messages(SOCKET client_socket) {
     std::string pending_data;
@@ -161,6 +293,33 @@ void receive_messages(SOCKET client_socket) {
 
 
 int main() {
+    ClientConfig config;
+    bool config_loaded =
+        load_client_config(
+            "standalone/client.conf",
+            config
+        );
+
+    if (config_loaded) {
+        print_client_message(
+            "Client configuration loaded successfully."
+        );
+    } else {
+        print_client_error(
+            "Using default client configuration."
+        );
+    }
+
+    print_client_message(
+        "Server address: " +
+        config.server_ip_address +
+        ":" +
+        std::to_string(
+            config.server_port
+        )
+    );
+
+
     WSADATA wsa_data{};
 
     int result = WSAStartup(
@@ -197,11 +356,11 @@ int main() {
     sockaddr_in server_address{};
 
     server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(8080);
+    server_address.sin_port = htons(config.server_port);
 
     int address_result = inet_pton(
         AF_INET,
-        "127.0.0.1",
+        config.server_ip_address.c_str(),
         &server_address.sin_addr
     );
 
