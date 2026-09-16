@@ -10,6 +10,8 @@
 #include <condition_variable>
 #include <queue>
 #include <unordered_map>
+#include <fstream>
+#include <exception>
 
 struct ServerConfig {
     std::string ip_address = "127.0.0.1";
@@ -17,6 +19,30 @@ struct ServerConfig {
     int worker_count = 2;
     int listen_backlog = 16;
 };
+
+std::string trim(const std::string& text) {
+    std::size_t first =
+        text.find_first_not_of(
+            " \t\r\n"
+        );
+
+    if (first == std::string::npos) {
+        return "";
+    }
+
+    std::size_t last =
+        text.find_last_not_of(
+            " \t\r\n"
+        );
+
+    return text.substr(
+        first,
+        last - first + 1
+    );
+}
+
+
+
 std::mutex output_mutex;
 std::vector<SOCKET> connected_clients;
 std::mutex clients_mutex;
@@ -47,6 +73,132 @@ void log_error(const std::string& text) {
 
     std::cerr << text << '\n';
 }
+
+bool load_server_config(
+    const std::string& file_path,
+    ServerConfig& config
+) {
+    std::ifstream config_file(
+        file_path
+    );
+
+    if (!config_file.is_open()) {
+        log_error(
+            "Could not open configuration file: " +
+            file_path
+        );
+
+        return false;
+    }
+
+    // 先修改临时副本，读取成功后再覆盖原配置
+    ServerConfig loaded_config = config;
+
+    std::string line;
+    int line_number = 0;
+
+    while (std::getline(config_file, line)) {
+        ++line_number;
+
+        line = trim(line);
+
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+
+        std::size_t equal_position =
+            line.find('=');
+
+        if (equal_position ==
+            std::string::npos) {
+            log_error(
+                "Invalid configuration line " +
+                std::to_string(line_number) +
+                ": missing ="
+            );
+
+            return false;
+        }
+
+        std::string key = trim(
+            line.substr(
+                0,
+                equal_position
+            )
+        );
+
+        std::string value = trim(
+            line.substr(
+                equal_position + 1
+            )
+        );
+
+        try {
+            if (key == "ip_address") {
+                loaded_config.ip_address =
+                    value;
+            } else if (key == "port") {
+                int port = std::stoi(value);
+
+                if (port < 1 || port > 65535) {
+                    throw std::out_of_range(
+                        "invalid port"
+                    );
+                }
+
+                loaded_config.port =
+                    static_cast<unsigned short>(
+                        port
+                    );
+            } else if (key == "worker_count") {
+                int worker_count =
+                    std::stoi(value);
+
+                if (
+                    worker_count < 1 ||
+                    worker_count > 64
+                ) {
+                    throw std::out_of_range(
+                        "invalid worker count"
+                    );
+                }
+
+                loaded_config.worker_count =
+                    worker_count;
+            } else if (key == "listen_backlog") {
+                int listen_backlog =
+                    std::stoi(value);
+
+                if (listen_backlog < 1) {
+                    throw std::out_of_range(
+                        "invalid backlog"
+                    );
+                }
+
+                loaded_config.listen_backlog =
+                    listen_backlog;
+            } else {
+                log_error(
+                    "Unknown configuration key: " +
+                    key
+                );
+
+                return false;
+            }
+        } catch (const std::exception&) {
+            log_error(
+                "Invalid configuration value on line " +
+                std::to_string(line_number)
+            );
+
+            return false;
+        }
+    }
+
+    config = loaded_config;
+    return true;
+}
+
 
 void add_client_task(
     SOCKET client_socket,
@@ -944,6 +1096,21 @@ void worker_thread() {
 
 int main() {
     ServerConfig config;
+     bool config_loaded =
+        load_server_config(
+            "standalone/server.conf",
+            config
+        );
+
+    if (config_loaded) {
+        log_message(
+            "Server configuration loaded successfully."
+        );
+    } else {
+        log_error(
+            "Using default server configuration."
+        );
+    }
     WSADATA wsa_data{};
 
     int result = WSAStartup(
